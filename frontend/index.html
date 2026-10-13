@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Next-token lab</title>
+<style>
+:root{font-family:system-ui,sans-serif;color:#172b39;background:#f4f6f8}*{box-sizing:border-box}body{margin:0}main{max-width:1200px;margin:auto;padding:48px 24px}h1{font-size:36px;margin:8px 0}p{line-height:1.6;color:#536471}.eyebrow{font-size:12px;letter-spacing:2px;color:#24756d;font-weight:700}.panel,.card{background:white;border:1px solid #dce3e8;border-radius:16px;padding:24px}.panel{margin:24px 0}label{display:block;font-weight:600;margin-bottom:10px}textarea{width:100%;font:20px/1.5 system-ui;padding:16px;border:1px solid #b4c3ce;border-radius:10px;resize:vertical}.controls{display:flex;flex-wrap:wrap;align-items:center;gap:16px;margin-top:20px}.controls label{margin:0;font-size:14px}select,button{font:inherit;border-radius:8px;padding:10px 14px;border:1px solid #b4c3ce;background:white}button{cursor:pointer}button.primary{background:#186e65;color:white;border-color:#186e65}button:disabled{opacity:.5;cursor:wait}button:focus-visible,textarea:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid #69b8fa;outline-offset:3px}#status{font-size:14px;margin:16px 0 0}#results{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}.card{padding:20px;min-width:0}.card h2{font-size:19px;margin:0 0 12px}.row{margin:14px 0}.row-label{display:flex;justify-content:space-between;gap:8px;font-size:13px}.token{font-family:ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.track{height:8px;background:#edf1f4;border-radius:5px;margin-top:7px;overflow:hidden}.bar{height:100%;background:#268b80}.other .bar{background:#a2adb5}.sample{font-size:13px;background:#f3f6f8;padding:12px;border-radius:8px;margin:16px 0}.card button{font-size:13px;width:100%}.error{color:#ae352a;font-size:14px;line-height:1.5}.note{font-size:13px}.snapshot{font-size:14px;white-space:pre-wrap;overflow-wrap:anywhere}footer{margin-top:24px} @media(max-width:950px){#results{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:540px){main{padding:24px 16px}#results{grid-template-columns:1fr}h1{font-size:28px}}
+.comparison-wrap{overflow-x:auto;margin:20px 0}.comparison{width:100%;border-collapse:collapse;background:white;font-size:14px}.comparison th,.comparison td{padding:12px;border-bottom:1px solid #dce3e8;text-align:left;min-width:140px}.comparison td:first-child{font-family:ui-monospace,monospace}.comparison .bar{background:#268b80}.example{font-size:13px;padding:6px 10px}.missing{color:#7c8791}
+.chat-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.reply{white-space:pre-wrap;line-height:1.7;margin:16px 0}.token-button{border:0;background:#edf5f3;padding:2px 3px;margin:1px;border-radius:3px;font:14px ui-monospace,monospace;white-space:pre-wrap}.token-button[aria-pressed="true"]{background:#186e65;color:white}.card .token-button{width:auto}.history-turn{padding:12px;border-bottom:1px solid #dce3e8;white-space:pre-wrap;line-height:1.6}.inspect{background:#f6f8fa;padding:12px;border-radius:8px;margin:12px 0}@media(max-width:650px){.chat-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body><main>
+<div class="eyebrow">LANGUAGE MODEL EXPLORER</div>
+<h1>What comes next?</h1>
+<p>Same text. Same model. Different style instructions. Compare the probabilities of the next output token.</p>
+<form class="panel" id="form">
+<label for="prompt">Start a sentence</label>
+<textarea id="prompt" rows="3" maxlength="4000" required>The night was</textarea>
+<p class="note">Try a more open prefix: <button type="button" class="example" data-prefix="The discovery">The discovery</button> <button type="button" class="example" data-prefix="After the announcement">After the announcement</button> <button type="button" class="example" data-prefix="In the beginning">In the beginning</button></p>
+<div class="controls">
+<label for="corpus">Style</label><select id="corpus"><option value="all">Compare all four</option><option value="novels">Novels</option><option value="lyrics">Lyrics</option><option value="news">News</option><option value="academic">Academic</option></select>
+<label for="temperature">Temperature <output id="temp-value">1.0</output></label><input id="temperature" type="range" min="0" max="2" step="0.1" value="1">
+<button type="submit" class="primary" id="compare">Compare next tokens</button>
+<button type="button" id="reset">Reset</button>
+</div>
+<p id="status" role="status" aria-live="polite">Checking backend…</p>
+</form>
+<p id="snapshot" class="snapshot" hidden></p>
+<div id="comparison"></div>
+<section id="results" aria-label="Next-token distributions"></section>
+<section class="panel" aria-label="Chat comparison">
+<h2>Chat in four styles</h2>
+<p>Ask the same question in every style. Choose one reply to keep a shared conversation for the next turn.</p>
+<div id="chat-history"></div>
+<form id="chat-form"><label for="chat-message">Your message</label>
+<textarea id="chat-message" rows="2" maxlength="4000" required>Describe what happens when a city loses electricity at night.</textarea>
+<div class="controls"><button class="primary" type="submit">Send to all four styles</button><button id="new-chat" type="button">New chat</button></div></form>
+<p id="chat-status" role="status" aria-live="polite">Uses the temperature above. Four API requests per turn.</p>
+<div id="chat-comparison"></div><div id="chat-results" class="chat-grid"></div>
+<p class="note">Inspect any output token to see its probability and alternatives at that position. Only the first-token distributions share the same conversation context across styles. Later tokens depend on each reply's own preceding text. Token probabilities measure likelihood, not truth or how “literary” a response is.</p>
+</section>
+<footer><p class="note">Classroom simulation: the styles change system instructions and continuation examples, not model weights. Similar probabilities are a valid result; styles need not separate on every prefix. Bars show API-reported probabilities without renormalizing. “Other” covers tokens outside the returned top 10. Tokens can include spaces, punctuation, or word fragments. Each style comparison makes one API request.</p></footer>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const styles = {novels:'Novels',lyrics:'Lyrics',news:'News',academic:'Academic'};
+let busy=false;
+for(const button of document.querySelectorAll('.example'))button.addEventListener('click',()=>{$('prompt').value=button.dataset.prefix;$('status').textContent='Example selected. Compare to request fresh probabilities.';});
+function renderComparison(results, selected, target='comparison'){
+ const good=results.filter(r=>r&&r.data);if(good.length<2)return;
+ const union=new Map();
+ for(const {data} of good)for(const t of data.tokens){const key=JSON.stringify(t.bytes??t.token);if(!union.has(key))union.set(key,{token:t.token,key,values:[]});union.get(key).values.push(t.probability);}
+ const ranked=[...union.values()].sort((a,b)=>Math.max(...b.values)-Math.max(...a.values));
+ const heading=element('h2','','Compare the same tokens');const note=element('p','note','Matching tokens share a row. “Not in top 10” means the probability was not returned; it does not mean zero. Rows are ordered by the largest reported probability.');
+ const wrap=element('div','comparison-wrap');const table=element('table','comparison');const head=element('thead');const header=element('tr');header.append(element('th','','Token'));for(const corpus of selected)header.append(element('th','',styles[corpus]));head.append(header);table.append(head);const body=element('tbody');
+ for(const item of ranked){const tr=element('tr');tr.append(element('td','',JSON.stringify(item.token)));for(const corpus of selected){const result=good.find(r=>r.corpus===corpus);const token=result?.data.tokens.find(t=>JSON.stringify(t.bytes??t.token)===item.key);const td=element('td',token?'':'missing',token?(token.probability*100).toFixed(1)+'%':result?'Not in top 10':'Unavailable');if(token){const track=element('div','track');const bar=element('div','bar');bar.style.width=(token.probability*100)+'%';track.append(bar);td.append(track);}tr.append(td);}body.append(tr);}
+ table.append(body);wrap.append(table);$(target).replaceChildren(heading,note,wrap);
+}
+
+$('temperature').addEventListener('input',()=>{$('temp-value').textContent=Number($('temperature').value).toFixed(1)});
+function element(tag, className, text){const el=document.createElement(tag);if(className)el.className=className;if(text!==undefined)el.textContent=text;return el;}
+function setBusy(value){busy=value;for(const el of document.querySelectorAll('button,select,input,textarea'))el.disabled=value;}
+function row(token,probability,other=false){
+ const el=element('div','row'+(other?' other':''));const label=element('div','row-label');
+ label.append(element('span','token',other?'Other':JSON.stringify(token)),element('span','',(probability*100).toFixed(1)+'%'));
+ const track=element('div','track');const bar=element('div','bar');bar.style.width=Math.max(0,Math.min(100,probability*100))+'%';track.append(bar);el.append(label,track);return el;
+}
+function render(card,data,prompt){
+ card.append(element('div','note',data.model));
+ for(const token of data.tokens)card.append(row(token.token,token.probability));
+ card.append(row('',data.other_probability,true));
+ const sample=element('div','sample');sample.append(element('span','','Sampled token: '),element('span','token',JSON.stringify(data.generated_token)));card.append(sample);
+ const append=element('button','','Append sampled token');
+ // Only append tokens whose bytes form complete UTF-8; never introduce a replacement character.
+ let text=data.generated_token;
+ try {if(data.generated_token_bytes)text=new TextDecoder('utf-8',{fatal:true}).decode(new Uint8Array(data.generated_token_bytes));}
+ catch {append.disabled=true;append.textContent='Partial UTF-8 token — cannot append';}
+ append.addEventListener('click',()=>{
+  if(busy)return;
+  if($('prompt').value!==prompt){$('status').textContent='The prompt has changed. Compare again before appending a token.';return;}
+  if(prompt.length+text.length>4000){$('status').textContent='The prompt is at the 4,000-character limit.';return;}
+  $('prompt').value=prompt+text;$('results').replaceChildren();$('comparison').replaceChildren();$('snapshot').hidden=true;
+  $('status').textContent='Token appended. Compare again to see the next distribution.';$('prompt').focus();
+ });card.append(append);
+}
+$('form').addEventListener('submit',async event=>{
+ event.preventDefault();if(busy)return;
+ const prompt=$('prompt').value;if(!prompt.trim()){$('status').textContent='Enter some text first.';return;}
+ const temperature=Number($('temperature').value);
+ const selected=$('corpus').value==='all'?Object.keys(styles):[$('corpus').value];
+ setBusy(true);$('results').replaceChildren();$('comparison').replaceChildren();$('snapshot').hidden=false;$('snapshot').textContent='Comparing: '+JSON.stringify(prompt)+' · Temperature '+temperature.toFixed(1);$('status').textContent='Requesting next-token probabilities…';
+ const results=await Promise.all(selected.map(async corpus=>{
+  const card=element('article','card');card.append(element('h2','',styles[corpus]));const loading=element('p','note','Loading…');card.append(loading);$('results').append(card);
+  try{
+   const response=await fetch('/next-token',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt,corpus,temperature,top_logprobs:10}),signal:AbortSignal.timeout(90000)});
+   const data=await response.json();if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'Request rejected. Check your input and backend configuration.');
+   loading.remove();render(card,data,prompt);return {corpus,data};
+  }catch(error){loading.remove();card.append(element('p','error',error.name==='TimeoutError'?'Request timed out. Please try again.':error.message));return null;}
+ }));
+ renderComparison(results,selected);
+ setBusy(false);
+ // Keep partial-byte append buttons disabled after the global loading lock is released.
+ for(const button of $('results').querySelectorAll('button'))if(button.textContent.startsWith('Partial UTF-8'))button.disabled=true;
+ const count=results.filter(Boolean).length;$('status').textContent=count===selected.length?'Ready. Append a sampled token or change the text and compare again.':`${count} of ${selected.length} styles loaded. See the errors below.`;
+});
+$('reset').addEventListener('click',()=>{$('prompt').value='The night was';$('results').replaceChildren();$('comparison').replaceChildren();$('snapshot').hidden=true;$('status').textContent='Ready to compare.';});
+(async()=>{try{const response=await fetch('/health');if(!response.ok)throw new Error();const data=await response.json();$('status').textContent=data.api_key_configured?'Backend ready · '+data.model:'Add OPENAI_API_KEY to backend/.env, then restart the backend.';}catch{$('status').textContent='Backend unavailable. Open this page through http://localhost:8000.';}})();
+
+let conversation=[];
+function showHistory(){
+ $('chat-history').replaceChildren();
+ for(const message of conversation)$('chat-history').append(element('div','history-turn',(message.role==='user'?'You: ':'Chosen reply: ')+message.content));
+}
+function renderChat(card,data,requestMessages){
+ card.append(element('div','note',data.model));
+ card.append(element('div','reply',data.text));
+ if(data.finish_reason==='length')card.append(element('p','note','Reply reached the token limit and may be incomplete.'));
+ card.append(element('p','note','Click a token to inspect its next-token probabilities:'));
+ const strip=element('div');const inspector=element('div','inspect');
+ data.positions.forEach((position,index)=>{
+  const button=element('button','token-button',JSON.stringify(position.token));button.type='button';button.title='Token '+(index+1)+': '+(position.probability*100).toFixed(1)+'%';button.setAttribute('aria-pressed','false');
+  button.addEventListener('click',()=>{
+   for(const b of strip.querySelectorAll('button'))b.setAttribute('aria-pressed',String(b===button));
+   inspector.replaceChildren(element('p','note',`Token ${index+1}: ${JSON.stringify(position.token)} · ${(position.probability*100).toFixed(1)}% probability · logprob ${position.logprob.toFixed(3)}`));
+   inspector.append(element('p','note',index===0?'Context: shared conversation plus this style instruction.':'Context: conversation plus this style instruction, then '+JSON.stringify(data.positions.slice(0,index).map(p=>p.token).join(''))));
+   for(const option of position.alternatives)inspector.append(row(option.token,option.probability));inspector.append(row('',position.other_probability,true));
+  });strip.append(button);
+ });card.append(strip,inspector);
+ if(strip.firstChild)strip.firstChild.click();
+ const keep=element('button','','Continue with this reply');keep.type='button';
+ keep.addEventListener('click',()=>{
+  if(busy)return;
+  conversation=[...requestMessages,{role:'assistant',content:data.text}];showHistory();$('chat-results').replaceChildren();$('chat-comparison').replaceChildren();$('chat-message').value='';$('chat-message').focus();$('chat-status').textContent='Reply selected. Ask your next question; all styles will receive this same history.';
+ });card.append(keep);
+}
+$('chat-form').addEventListener('submit',async event=>{
+ event.preventDefault();if(busy)return;const message=$('chat-message').value;
+ if(!message.trim())return;
+ const messages=[...conversation,{role:'user',content:message}];
+ if(messages.length>13||messages.reduce((n,m)=>n+m.content.length,0)>16000){$('chat-status').textContent='Conversation limit reached. Start a new chat.';return;}
+ const temperature=Number($('temperature').value);setBusy(true);$('chat-results').replaceChildren();$('chat-comparison').replaceChildren();$('chat-status').textContent='Generating four replies for: '+JSON.stringify(message);
+ const results=await Promise.all(Object.keys(styles).map(async corpus=>{
+  const card=element('article','card');card.append(element('h2','',styles[corpus]));const loading=element('p','note','Generating…');card.append(loading);$('chat-results').append(card);
+  try{
+   const response=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages,corpus,temperature}),signal:AbortSignal.timeout(90000)});const data=await response.json();if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'Conversation rejected. Start a new chat or shorten the message.');
+   loading.remove();renderChat(card,data,messages);
+   const first=data.positions[0];return {corpus,data:{tokens:first.alternatives}};
+  }catch(error){loading.remove();card.append(element('p','error',error.name==='TimeoutError'?'Request timed out. Try again.':error.message));return null;}
+ }));
+ renderComparison(results,Object.keys(styles),'chat-comparison');setBusy(false);$('chat-status').textContent=results.filter(Boolean).length+' of 4 replies ready. Compare the first-token probabilities above; choose a reply to continue.';
+});
+$('new-chat').addEventListener('click',()=>{conversation=[];showHistory();$('chat-results').replaceChildren();$('chat-comparison').replaceChildren();$('chat-message').value='';$('chat-status').textContent='New conversation. Enter a message to compare all styles.';});
+</script>
+</body></html>
