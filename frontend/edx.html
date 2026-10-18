@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Next-token explorer</title>
+<style>
+:root{font-family:system-ui,sans-serif;color:#172b39;background:#f4f6f8}*{box-sizing:border-box}body{margin:0}main{max-width:1200px;margin:auto;padding:32px 24px}h1{font-size:36px;margin:8px 0}p{line-height:1.6;color:#536471}.eyebrow{font-size:12px;letter-spacing:2px;color:#24756d;font-weight:700}.panel,.card{background:white;border:1px solid #dce3e8;border-radius:16px;padding:24px}.panel{margin:24px 0}.label{display:block;font-weight:600;margin:0 0 10px;color:#172b39}.controls{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-top:20px}button{font:inherit;border-radius:8px;padding:10px 14px;border:1px solid #b4c3ce;background:white;color:inherit;cursor:pointer}button.primary,button[aria-pressed="true"]{background:#186e65;color:white;border-color:#186e65}button:disabled,textarea:disabled{opacity:.5;cursor:default}button:focus-visible,textarea:focus-visible{outline:3px solid #69b8fa;outline-offset:3px}textarea{width:100%;font:18px/1.5 system-ui;padding:12px 16px;border:1px solid #b4c3ce;border-radius:10px;resize:vertical}#status{font-size:14px;margin:16px 0 0}#results{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}.card{padding:20px;min-width:0}.card h2{font-size:19px;margin:0 0 12px}.row{display:block;width:100%;margin:6px 0;padding:6px 8px;text-align:left;border:1px solid transparent;border-radius:8px;background:none}.row-label{display:flex;justify-content:space-between;gap:8px;font-size:13px}.token{font-family:ui-monospace,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.track{height:8px;background:#edf1f4;border-radius:5px;margin-top:7px;overflow:hidden}.bar{height:100%;background:#268b80}.other .bar{background:#a2adb5}button.row{border-color:#cfe3df;background:#f6fbfa}button.row:hover{border-color:#268b80;background:#edf5f3}button.row .token::before{content:"+ ";color:#24756d;font-weight:700}.card .sample{font-size:13px;width:100%;margin-top:12px}.note{font-size:13px}.error{color:#ae352a;font-size:14px;line-height:1.5}.text{font:22px/1.5 system-ui;white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:16px;border:1px solid #dce3e8;border-radius:10px;background:#fbfcfd}.added{background:#d7ece8;border-radius:4px}footer{margin-top:24px}@media(max-width:950px){#results{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:540px){main{padding:20px 16px}#results{grid-template-columns:1fr}h1{font-size:28px}}
+.comparison-wrap{overflow-x:auto;margin:20px 0}.comparison{width:100%;border-collapse:collapse;background:white;font-size:14px}.comparison th,.comparison td{padding:12px;border-bottom:1px solid #dce3e8;text-align:left;min-width:140px}.comparison td:first-child{font-family:ui-monospace,monospace}.missing{color:#7c8791}
+</style>
+</head>
+<body><main>
+<div class="eyebrow">LANGUAGE MODEL EXPLORER</div>
+<h1>What comes next?</h1>
+<p>Same text. Same model. Different style instructions. Compare the probabilities of the next output token, then click a token to add it and see how the possibilities change.</p>
+<section class="panel" aria-label="Text to continue">
+<p class="label">1. Pick a starting phrase</p>
+<div class="controls" id="phrases"></div>
+<form id="own" hidden><label class="label" for="own-text" style="margin-top:20px">…or start your own sentence</label>
+<textarea id="own-text" rows="2" maxlength="4000" placeholder="Type the beginning of a sentence"></textarea>
+<div class="controls"><button type="submit" class="primary">Compare next tokens</button></div></form>
+<p class="label" style="margin-top:24px">2. Text so far</p>
+<p class="text" id="text" aria-live="polite"></p>
+<div class="controls"><button type="button" id="back">Undo last token</button><button type="button" id="reset">Start over</button></div>
+<p id="status" role="status" aria-live="polite"></p>
+</section>
+<section id="results" aria-label="Next-token distributions"></section>
+<div id="comparison"></div>
+<footer><p class="note" id="about"></p></footer>
+</main>
+<script>
+// Filled in by the backend (/edx) or `python -m backend.precompute`; this file is the template.
+const DATA = null;
+const LIVE = false;
+const KEY = new URLSearchParams(location.search).get('key') || '';
+const $ = id => document.getElementById(id);
+const styles = {novels:'Novels',lyrics:'Lyrics',news:'News',academic:'Academic'};
+const live = new Map();  // Full text -> promise of a node, so undo and repeat clicks are free.
+let phrase = null, path = [], ticket = 0;
+function element(tag, className, text){const el=document.createElement(tag);if(className)el.className=className;if(text!==undefined)el.textContent=text;return el;}
+function percent(p){return (p*100).toFixed(1)+'%';}
+function setBusy(value){for(const el of document.querySelectorAll('button,textarea'))el.disabled=value;}
+function row(token,probability,other=false,tag='div'){
+ const el=element(tag,'row'+(other?' other':''));const label=element('div','row-label');
+ label.append(element('span','token',other?'Other':JSON.stringify(token)),element('span','',percent(probability)));
+ const track=element('div','track');const bar=element('div','bar');bar.style.width=Math.max(0,Math.min(100,probability*100))+'%';track.append(bar);el.append(label,track);return el;
+}
+function treeNode(){
+ if(!DATA||!Object.hasOwn(DATA.phrases,phrase))return null;
+ let node=DATA.phrases[phrase];
+ for(const text of path){if(!Object.hasOwn(node.children,text))return null;node=node.children[text];}
+ return node;
+}
+// Only append tokens whose bytes form complete UTF-8; never introduce a replacement character.
+function decode(t){if(!t.bytes)return t.token;try{return new TextDecoder('utf-8',{fatal:true}).decode(new Uint8Array(t.bytes));}catch{return null;}}
+function liveNode(text){
+ if(!live.has(text))live.set(text,Promise.all(Object.keys(styles).map(async corpus=>{
+  try{
+   const response=await fetch('/next-token',{method:'POST',headers:{'Content-Type':'application/json','X-Access-Token':KEY},body:JSON.stringify({prompt:text,corpus,temperature:1,top_logprobs:10}),signal:AbortSignal.timeout(90000)});
+   const data=await response.json();if(!response.ok)throw new Error(typeof data.detail==='string'?data.detail:'Request rejected. Check your text and try again.');
+   return [corpus,{tokens:data.tokens.map(t=>({token:t.token,probability:t.probability,text:decode(t)})),other_probability:data.other_probability}];
+  }catch(error){return [corpus,{error:error.name==='TimeoutError'?'Request timed out. Please try again.':error.message}];}
+ })).then(entries=>{if(entries.some(([,s])=>s.error))live.delete(text);return {styles:Object.fromEntries(entries),children:{}};}));
+ return live.get(text);
+}
+function add(text){path.push(text);show();}
+function renderComparison(node){
+ const loaded=Object.keys(styles).filter(c=>!node.styles[c].error);if(loaded.length<2){$('comparison').replaceChildren();return;}
+ const union=new Map();
+ for(const corpus of loaded)for(const t of node.styles[corpus].tokens){if(!union.has(t.token))union.set(t.token,[]);union.get(t.token).push(t.probability);}
+ const ranked=[...union.keys()].sort((a,b)=>Math.max(...union.get(b))-Math.max(...union.get(a)));
+ const heading=element('h2','','Compare the same tokens');const note=element('p','note','Matching tokens share a row. “Not in top 10” means the probability was not returned; it does not mean zero. Rows are ordered by the largest reported probability.');
+ const wrap=element('div','comparison-wrap');const table=element('table','comparison');const head=element('thead');const header=element('tr');header.append(element('th','','Token'));for(const corpus in styles)header.append(element('th','',styles[corpus]));head.append(header);table.append(head);const body=element('tbody');
+ for(const token of ranked){const tr=element('tr');tr.append(element('td','',JSON.stringify(token)));for(const corpus in styles){const s=node.styles[corpus];const t=s.error?null:s.tokens.find(t=>t.token===token);const td=element('td',t?'':'missing',t?percent(t.probability):s.error?'Unavailable':'Not in top 10');if(t){const track=element('div','track');const bar=element('div','bar');bar.style.width=(t.probability*100)+'%';track.append(bar);td.append(track);}tr.append(td);}body.append(tr);}
+ table.append(body);wrap.append(table);$('comparison').replaceChildren(heading,note,wrap);
+}
+async function show(){
+ const mine=++ticket;
+ for(const button of $('phrases').children)button.setAttribute('aria-pressed',String(button.dataset.phrase===phrase));
+ if(phrase===null){$('text').textContent=DATA||LIVE?'Choose a phrase above.':'No data yet. Run `python -m backend.precompute`.';$('results').replaceChildren();$('comparison').replaceChildren();$('status').textContent='';$('back').disabled=$('reset').disabled=true;return;}
+ $('text').replaceChildren(document.createTextNode(phrase),...path.map(text=>element('span','added',text)));
+ const text=phrase+path.join('');
+ let node=treeNode();
+ if(!node){
+  setBusy(true);$('comparison').replaceChildren();$('status').textContent='Requesting live probabilities…';
+  $('results').replaceChildren(...Object.values(styles).map(name=>{const card=element('article','card');card.append(element('h2','',name),element('p','note','Loading…'));return card;}));
+  node=await liveNode(text);
+  if(mine!==ticket)return;
+  setBusy(false);
+ }
+ $('back').disabled=!path.length;$('reset').disabled=false;
+ const clickable=t=>t.text!==null&&text.length+t.text.length<=4000&&(LIVE||Object.hasOwn(node.children,t.text));
+ $('results').replaceChildren(...Object.keys(styles).map(corpus=>{
+  const card=element('article','card');card.append(element('h2','',styles[corpus]));const dist=node.styles[corpus];
+  if(dist.error){card.append(element('p','error',dist.error));return card;}
+  const choices=dist.tokens.filter(clickable);
+  for(const t of dist.tokens){
+   if(!choices.includes(t)){card.append(row(t.token,t.probability));continue;}
+   const button=row(t.token,t.probability,false,'button');button.type='button';button.setAttribute('aria-label','Add '+JSON.stringify(t.token)+', '+percent(t.probability)+' in '+styles[corpus]);
+   button.addEventListener('click',()=>add(t.text));card.append(button);
+  }
+  card.append(row('',dist.other_probability,true));
+  if(choices.length){
+   const sample=element('button','sample','Sample a token for '+styles[corpus]);sample.type='button';
+   // Weighted by reported probability among the clickable tokens only (renormalized over those).
+   sample.addEventListener('click',()=>{let r=Math.random()*choices.reduce((n,t)=>n+t.probability,0);for(const t of choices){r-=t.probability;if(r<=0)return add(t.text);}add(choices[choices.length-1].text);});
+   card.append(sample);
+  }
+  return card;
+ }));
+ renderComparison(node);
+ const failed=Object.values(node.styles).filter(s=>s.error).length;
+ if(failed)$('status').textContent=`${4-failed} of 4 styles loaded. See the errors below.`;
+ else if(LIVE)$('status').textContent='Click a highlighted (+) token in any style to add it, or sample one.';
+ else{const step=path.length+1;$('status').textContent=Object.keys(node.children).length?`Step ${step} of ${DATA.depth}. Click a highlighted (+) token in any style to add it, or sample one.`:`Step ${step} of ${DATA.depth}: end of this activity's prepared paths. Undo a token or start over to explore another branch.`;}
+}
+if(DATA)for(const p in DATA.phrases){const button=element('button','',p);button.type='button';button.dataset.phrase=p;button.addEventListener('click',()=>{phrase=p;path=[];show();});$('phrases').append(button);}
+$('own').hidden=!LIVE;
+$('own').addEventListener('submit',event=>{event.preventDefault();const value=$('own-text').value;if(!value.trim()){$('status').textContent='Type some text first.';return;}phrase=value;path=[];show();});
+$('back').addEventListener('click',()=>{path.pop();show();});
+$('reset').addEventListener('click',()=>{path=[];show();});
+$('about').textContent=[
+ 'Classroom simulation using real model probabilities at temperature 1.0.',
+ DATA?`Starting phrases were prepared in advance with ${DATA.model}.`:'',
+ LIVE?'Text beyond the prepared paths, including your own, is sent to the model when you click (four requests per step).':'',
+ 'The styles change system instructions and continuation examples, not model weights. Similar probabilities are a valid result; styles need not separate on every prefix. Bars show API-reported probabilities without renormalizing. “Other” covers tokens outside the returned top 10. Tokens marked + can be added; “Sample” picks among those in proportion to their probability. Tokens can include spaces, punctuation, or word fragments.',
+].filter(Boolean).join(' ');
+show();
+</script>
+</body></html>

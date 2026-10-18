@@ -11,7 +11,8 @@ from backend.main import app, SYSTEM_PROMPTS
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.delenv('OPENAI_API_KEY', raising=False)
+    for name in ('OPENAI_API_KEY', 'ACCESS_TOKEN', 'DAILY_REQUEST_LIMIT'):
+        monkeypatch.delenv(name, raising=False)
     with TestClient(app) as client:
         yield client
 
@@ -102,3 +103,30 @@ def test_chat_preserves_shared_history_and_all_positions(client):
     [{'role': 'user', 'content': 'Hello'}, {'role': 'user', 'content': 'Again'}]])
 def test_chat_invalid_history(client, messages):
     assert client.post('/chat', json={'messages': messages, 'corpus': 'news'}).status_code == 422
+
+
+def test_access_token_required_when_configured(client):
+    create = fake_api()
+    app.state.access_token = 'class-secret'
+    body = {'prompt': 'Hello', 'corpus': 'novels'}
+    assert client.post('/next-token', json=body).status_code == 401
+    assert client.post('/next-token', json=body, headers={'X-Access-Token': 'wrong'}).status_code == 401
+    assert client.post('/chat', json={'messages': [{'role': 'user', 'content': 'Hi'}], 'corpus': 'news'}).status_code == 401
+    assert create.call_count == 0
+    assert client.post('/next-token', json=body, headers={'X-Access-Token': 'class-secret'}).status_code == 200
+
+
+def test_daily_request_limit(client):
+    create = fake_api()
+    app.state.daily_limit = 2
+    body = {'prompt': 'Hello', 'corpus': 'novels'}
+    assert [client.post('/next-token', json=body).status_code for _ in range(3)] == [200, 200, 429]
+    assert create.call_count == 2
+    app.state.usage['day'] = None  # A new day resets the count.
+    assert client.post('/next-token', json=body).status_code == 200
+
+
+def test_edx_page_is_live(client):
+    response = client.get('/edx')
+    assert response.status_code == 200
+    assert 'const LIVE = true;' in response.text

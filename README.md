@@ -86,7 +86,84 @@ establish live model availability; the curl request with your key does that.
 - [Chat Completions request and logprobs schema](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
 - [GPT-4.1 mini](https://developers.openai.com/api/docs/models/gpt-4.1-mini)
 
-Open edX embedding is the next stage.
+## Open edX static page (no backend in class)
+
+Students pick one of three fixed phrases, then click any style's top-5 token
+(or sample one) to append it and compare all four styles again, three steps
+deep. Every distribution is precomputed once, so the course needs no server,
+API key, or per-student cost.
+
+```sh
+python -m backend.precompute   # uses OPENAI_API_KEY / OPENAI_MODEL from backend/.env
+```
+
+This writes `dist/next-token-demo.html` (data embedded) and
+`dist/next-token-data.json` (the same data, for inspection). Phrases, branching,
+and depth are constants at the top of `backend/precompute.py`; requests grow as
+(5 × 4 styles)^depth in the worst case. The template is `frontend/edx.html`.
+
+In Studio, upload `next-token-demo.html` under **Content → Files**, then add an
+HTML component (Raw HTML editor) containing:
+
+```html
+<iframe src="/static/next-token-demo.html" title="Next-token explorer"
+        style="width:100%;height:1500px;border:0"></iframe>
+```
+
+Probabilities are a snapshot from one run at temperature 1, so the page has no
+temperature control; rerun the script to refresh them.
+
+## Open edX with students' own text (Google Cloud Run)
+
+Served by the backend at `/edx`, the same page also lets students type their
+own text and keep adding tokens beyond the prepared paths; those steps call
+`/next-token` live (four requests each). Prepared paths still cost nothing.
+
+Two optional env vars protect the deployed backend:
+
+- `ACCESS_TOKEN`: `/next-token` and `/chat` require a matching `X-Access-Token`
+  header. The page reads it from its URL (`/edx?key=…`). It sits in the course
+  page source, so it stops casual misuse of the URL, not a determined student.
+- `DAILY_REQUEST_LIMIT`: upstream requests allowed per day (0 = unlimited). The
+  count lives in memory, so deploy with one instance; it resets when the
+  instance restarts. Keep a hard budget limit in your OpenAI project as well.
+
+One-time setup, with the [gcloud CLI](https://cloud.google.com/sdk/docs/install)
+and a project that has billing enabled:
+
+```sh
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com
+grep '^OPENAI_API_KEY=' backend/.env | cut -d= -f2- | tr -d '\n' | gcloud secrets create openai-api-key --data-file=-
+python3 -c "import secrets; print(secrets.token_urlsafe(24), end='')" | gcloud secrets create next-token-access --data-file=-
+NUMBER=$(gcloud projects describe "$(gcloud config get-value project)" --format='value(projectNumber)')
+for s in openai-api-key next-token-access; do
+  gcloud secrets add-iam-policy-binding $s --role=roles/secretmanager.secretAccessor \
+    --member=serviceAccount:$NUMBER-compute@developer.gserviceaccount.com
+done
+```
+
+Deploy (and redeploy after changes) from this folder. `.gcloudignore` keeps
+`.env` out of the upload; `dist/next-token-data.json` must exist first.
+
+```sh
+gcloud run deploy next-token-lab --source . --region northamerica-northeast2 \
+  --allow-unauthenticated --max-instances 1 \
+  --set-secrets OPENAI_API_KEY=openai-api-key:latest,ACCESS_TOKEN=next-token-access:latest \
+  --set-env-vars OPENAI_MODEL=gpt-4.1-mini,DAILY_REQUEST_LIMIT=10000
+```
+
+Print the access token with
+`gcloud secrets versions access latest --secret next-token-access`, then use this
+in a Raw HTML component (no file upload needed):
+
+```html
+<iframe src="https://YOUR-SERVICE-URL/edx?key=YOUR_ACCESS_TOKEN" title="Next-token explorer"
+        style="width:100%;height:2800px;border:0"></iframe>
+```
+
+To change the token, add a new secret version and redeploy; update the iframe.
 
 ## Making differences visible
 

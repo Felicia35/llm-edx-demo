@@ -1,18 +1,25 @@
 """Local teaching backend: instruction-conditioned token distributions."""
+import hmac
+import json
 import math
 import os
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 from typing import Literal
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from openai import AsyncOpenAI, APIConnectionError, APIStatusError, APITimeoutError, AuthenticationError, RateLimitError
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 load_dotenv(Path(__file__).with_name('.env'))
+ROOT = Path(__file__).resolve().parent.parent
+EDX_DATA = ROOT / 'dist' / 'next-token-data.json'  # Written by `python -m backend.precompute`.
+DATA_PLACEHOLDER = 'const DATA = null;'
+LIVE_PLACEHOLDER = 'const LIVE = false;'
 MODEL = os.getenv('OPENAI_MODEL', 'gpt-4.1-mini')
 COMMON = """Continue the text supplied by the user, starting exactly where it ends.
 Return only the continuation, without repeating the input, adding a preamble,
@@ -46,6 +53,9 @@ for corpus, examples in EXAMPLES.items():
 async def lifespan(app: FastAPI):
     key = os.getenv('OPENAI_API_KEY', '').strip()
     app.state.openai = AsyncOpenAI(api_key=key, timeout=30.0, max_retries=1) if key else None
+    app.state.access_token = os.getenv('ACCESS_TOKEN', '').strip()
+    app.state.daily_limit = int(os.getenv('DAILY_REQUEST_LIMIT', '0'))
+    app.state.usage = {'day': None, 'count': 0}
     yield
     if app.state.openai is not None:
         await app.state.openai.close()
@@ -56,13 +66,45 @@ app = FastAPI(title='LLM corpus-style demo', lifespan=lifespan)
 
 @app.get('/', include_in_schema=False)
 async def frontend():
-    return FileResponse(Path(__file__).resolve().parent.parent / 'frontend' / 'index.html')
+    return FileResponse(ROOT / 'frontend' / 'index.html')
+
+
+@app.get('/edx', include_in_schema=False)
+async def edx_frontend():
+    data = json.loads(EDX_DATA.read_text(encoding='utf-8')) if EDX_DATA.exists() else None
+    return HTMLResponse(render_page(data, live=True))
+
+
+def render_page(data, live=False, template=None):
+    """Fill frontend/edx.html with precomputed trees; live pages may also call /next-token."""
+    html = (template or ROOT / 'frontend' / 'edx.html').read_text(encoding='utf-8')
+    for placeholder in (DATA_PLACEHOLDER, LIVE_PLACEHOLDER):
+        if html.count(placeholder) != 1:
+            raise ValueError(f'The page template must contain {placeholder!r} exactly once.')
+    if data is not None:
+        # JSON.parse keeps token keys such as "__proto__" as plain data, unlike an object literal.
+        payload = json.dumps(json.dumps(data, ensure_ascii=False, separators=(',', ':'))).replace('</', '<\\/')
+        html = html.replace(DATA_PLACEHOLDER, f'const DATA = JSON.parse({payload});')
+    return html.replace(LIVE_PLACEHOLDER, f'const LIVE = {str(live).lower()};')
+
+
+async def guard(x_access_token: str = Header(default='')):
+    """Shared-secret check and daily request cap for the deployed backend; both are off when unset."""
+    token = app.state.access_token
+    if token and not hmac.compare_digest(x_access_token.encode(), token.encode()):
+        raise HTTPException(401, 'Missing or invalid access token. Open this activity from the course page.')
+    usage, today = app.state.usage, date.today()
+    if usage['day'] != today:
+        usage.update(day=today, count=0)
+    if app.state.daily_limit and usage['count'] >= app.state.daily_limit:
+        raise HTTPException(429, 'Daily request limit reached for this activity. Try again tomorrow.')
+    usage['count'] += 1
 
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[s.strip() for s in os.getenv('CORS_ORIGINS', 'http://localhost:5500,http://127.0.0.1:5500,http://localhost:8001,http://127.0.0.1:8001').split(',') if s.strip()],
-    allow_credentials=False, allow_methods=['GET', 'POST'], allow_headers=['Content-Type'],
+    allow_credentials=False, allow_methods=['GET', 'POST'], allow_headers=['Content-Type', 'X-Access-Token'],
 )
 
 
@@ -104,7 +146,7 @@ async def health():
     return {'status': 'ok', 'api_key_configured': app.state.openai is not None, 'model': MODEL}
 
 
-@app.post('/next-token', response_model=NextTokenResponse)
+@app.post('/next-token', response_model=NextTokenResponse, dependencies=[Depends(guard)])
 async def next_token(body: NextTokenRequest):
     result = await request_completion(
         [{'role': 'system', 'content': SYSTEM_PROMPTS[body.corpus]},
@@ -208,7 +250,7 @@ class ChatResponse(BaseModel):
     finish_reason: str
 
 
-@app.post('/chat', response_model=ChatResponse)
+@app.post('/chat', response_model=ChatResponse, dependencies=[Depends(guard)])
 async def chat(body: ChatRequest):
     instruction = ('Respond helpfully to the user in the specified writing style. '
                    'Keep your answer to about 50–70 words. Preserve factual accuracy. '
